@@ -1,0 +1,398 @@
+/*
+Проект:             Проект4: Авиарейсы без потерь
+Задание выполнил:   Сергей Светлаков
+Группа:             DSPR-38
+Git-Hub:            https://github.com/MirtosSergey/SF_project/tree/master
+*/
+
+--Шапка: пути ко всем таблицам
+/*
+    dst_project.aircrafts as ac
+    dst_project.airports as ap
+    dst_project.boarding_passes as bp
+    dst_project.bookings as b
+    dst_project.flights as f
+    dst_project.seats as s
+    dst_project.ticket_flights as tf
+    dst_project.tickets as t
+*/
+
+with
+    --База данных самолетов
+    airc as
+    (
+        select
+            s.aircraft_code as id_aircraft,                                                                 --ID самолета
+            count(distinct s.seat_no) as seats,                                                             --Количество мест в самолете
+            count(distinct s.fare_conditions) as unique_fare_conditions,                                    --Количество уникальных тарифов
+            count(distinct case when s.fare_conditions = 'Business' then s.seat_no end) as seats_Business,  --Количество мест тарифа 'Бизнес'
+            count(distinct case when s.fare_conditions = 'Comfort ' then s.seat_no end) as seats_Comfort,   --Количество мест тарифа 'Комфорт'
+            count(distinct case when s.fare_conditions = 'Economy' then s.seat_no end) as seats_Economy     --Количество мест тарифа 'Эконом'
+        from
+            dst_project.seats as s
+        group by
+            s.aircraft_code
+    ),
+    --База данных рейсов (нужных)
+    fly as
+    (
+        select
+            f.flight_id as id_flight,                                       --ID рейса
+            f.flight_no as no_flight,                                       --Номер рейса
+            f.status as status,                                             --Статус рейса
+            f.aircraft_code as id_aircraft,                                 --ID самолета
+            f.departure_airport as id_airport_dep,                          --ID аэропорта отбытия
+            f.arrival_airport as id_airport_arr,                            --ID аэропорта прибытия
+            f.scheduled_departure as date_dep_0,                            --Запланированная дата отбытия
+            f.scheduled_arrival as date_arr_0,                              --Запланированная дата прибытия
+            f.actual_departure as date_dep_1,                               --Реальная дата отбытия
+            f.actual_arrival as date_arr_1,                                 --Реальная дата прибытия
+            f.actual_departure - f.scheduled_departure as dep_delay,        --Задержка в отбытии
+            f.actual_arrival - f.scheduled_arrival as arr_delay,            --Задержка в прибытии
+            f.scheduled_arrival - f.scheduled_departure as time_0,          --Запланированное время полета
+            f.actual_arrival - f.actual_departure as time_1,                --Реальное время полета
+            ap_dep.airport_name as airport_name_dep,                        --Название аэропорта отбытия
+            ap_arr.airport_name as airport_name_arr,                        --Название аэропорта прибытия
+            ap_dep.city as city_dep,                                        --Название города отбытия
+            ap_arr.city as city_arr,                                        --Название города прибытия
+            ap_dep.longitude as longitude_dep,                              --Долгота (координата) города отбытия
+            ap_arr.longitude as longitude_arr,                              --Долгота (координата) города прибытия
+            ap_dep.latitude as latitude_dep,                                --Широта (координата) города отбытия
+            ap_arr.latitude as latitude_arr,                                --Широта (координата) города прибытия
+            ap_dep.timezone as timezone_dep,                                --Название временной зоны отбытия
+            ap_arr.timezone as timezone_arr,                                --Название временной зоны прибытия
+            a.seats as airc_full_seats,                                     --Количество мест в самолете
+            a.unique_fare_conditions as airc_full_unique_fare_conditions,   --Количество уникальных тарифов
+            a.seats_Business as airc_full_seats_Business,                   --Количество мест тарифа 'Бизнес'
+            a.seats_Comfort as airc_full_seats_Comfort,                     --Количество мест тарифа 'Комфорт'
+            a.seats_Economy as airc_full_seats_Economy,                     --Количество мест тарифа 'Эконом'
+            --Цена за килограмм в рублях
+            --Источник:
+            --https://favt.gov.ru/dejatelnost-ajeroporty-i-ajerodromy-ceny-na-aviagsm/?id=7329
+            --Смотрим за каждый зимний месяц 2017 года по АДЛЕРу
+            case
+                when (extract('month' from f.actual_departure) = '1') then 40.686
+                when (extract('month' from f.actual_departure) = '2') then 37.714
+                when (extract('month' from f.actual_departure) = '12') then 45.281
+                end as price_fuel_per,
+            --Расход топлива в секунду
+            --Источник:
+            --http://newsruss.ru/doc/index.php/%D0%A0%D0%B0%D1%81%D1%85%D0%BE%D0%B4_%D1%82%D0%BE%D0%BF%D0%BB%D0%B8%D0%B2%D0%B0_%D1%83_%D1%81%D0%B0%D0%BC%D0%BE%D0%BB%D1%91%D1%82%D0%BE%D0%B2
+            --Смотрим только для 'SU9' и '733', так как других самолетов из Анапы зимой 2017 года не летало
+            case
+                when f.aircraft_code = '733' then 0.75
+                when f.aircraft_code = 'SU9' then 0.55
+                end as fuel_consumption,
+            (extract('hour' from (f.scheduled_arrival - f.scheduled_departure)) * 3600 + extract('minute' from (f.scheduled_arrival - f.scheduled_departure)) * 60 + extract('second' from (f.scheduled_arrival - f.scheduled_departure))) as time_sec_0, --Запланированное время полета в секундах
+            (extract('hour' from (f.actual_arrival - f.actual_departure)) * 3600 + extract('minute' from (f.actual_arrival - f.actual_departure)) * 60 + extract('second' from (f.actual_arrival - f.actual_departure))) as time_sec_1 --Реальное время полета в секундах
+        from
+            dst_project.flights as f
+            join airc
+                on airc.id_aircraft = f.aircraft_code
+            join dst_project.airports as ap_dep
+                on ap_dep.airport_code = f.departure_airport
+            join dst_project.airports as ap_arr
+                on ap_arr.airport_code = f.arrival_airport
+            join airc as a
+                on a.id_aircraft = f.aircraft_code
+        where
+            --По условию задания выбираем только те рейсы, что вылетели из Адлера в зимние месяцы 2017 года
+            f.departure_airport = 'AAQ'
+            and f.status != 'Cancelled'
+            and extract('month' from f.scheduled_departure) in ('1', '2', '12')
+            and extract('year' from f.scheduled_departure) in ('2017')
+    ),
+    --База данных пассажиров
+    pas as
+    (
+        select
+            bp.flight_id as id_flight,              --ID рейса
+            t.passenger_id as id_passenger,         --ID пассажира
+            t.book_ref as id_booking,               --ID букинга
+            bp.ticket_no as id_ticket,              --Номер билета --> ID билета
+            bp.boarding_no as id_boarding,          --Номер посадочного талона --> ID посадочного талона
+            bp.seat_no as seat,                     --Номер места --> Место пассажира
+            --t.passenger_name as passenger_name,   --Имя пассажира (убрано, так как все одинаково)
+            --t.contact_data as contact_data,       --Контактная дата пассажира (убрано, так как все одинаково)
+            b.book_date as date_booking,            --Дата букинга
+            b.total_amount as amount_booking,       --Сумма букинга
+            tf.fare_conditions as fare_conditions,  --Тариф пассажира
+            tf.amount as amount_air                 --Сумма перелета
+        from
+            dst_project.ticket_flights as tf
+            left join dst_project.boarding_passes as bp
+                on bp.flight_id = tf.flight_id and bp.ticket_no = tf.ticket_no
+            left join dst_project.tickets as t
+                on bp.ticket_no = t.ticket_no
+            left join dst_project.bookings as b
+                on b.book_ref = t.book_ref
+        where
+            --Только те пассажиры, что на летают на рейсах, отобранных по условию задания
+            bp.flight_id in
+            (
+                select
+                    fly.id_flight
+                from
+                    fly
+            )
+    ),
+    --База данных сгрупированных пассажиров по рейсам
+    group_pas as
+    (
+        select
+            p.id_flight as id_flight,                           --ID рейса
+            count(distinct p.id_passenger) as count_passenger,  --Количество пассажиров на рейсе
+            --count(p.id_booking),                              --Количество ID букингов на рейсе (убрано, так как все одинаково с id_passenger)
+            --count(p.id_ticket),                               --Количество ID билетов на рейсе (убрано, так как все одинаково с id_passenger)
+            --count(p.id_boarding),                             --Количество ID посадочных талонов на рейсе (убрано, так как все одинаково с id_passenger)
+            --count(p.seat),                                    --Количество мест пассажиров на рейсе (убрано, так как все одинаково с id_passenger)
+            sum(p.amount_booking) as sum_amount_booking,        --Суммарная стоимость букинга
+            sum(p.amount_air) as sum_amount_air,                --Суммарная стоимость перелета
+            avg(p.amount_booking) as avg_amount_booking,        --Средняя стоимость букинга
+            avg(p.amount_air) as avg_amount_air,                --Средняя стоимость перелета
+            max(p.amount_booking) as max_amount_booking,        --Максимальная стоимость букинга
+            max(p.amount_air) as max_amount_air,                --Максимальная стоимость перелета
+            min(p.amount_booking) as min_amount_booking,        --Минимальная стоимость букинга
+            min(p.amount_air) as min_amount_air,                --Минимальная стоимость букинга
+            max(p.date_booking) as max_date_booking,            --Максимальная дата букинга
+            min(p.date_booking) as min_date_booking,            --Минимальная дата букинга
+            count(distinct case when p.fare_conditions = 'Business' then p.id_passenger end) as count_passenger_Business,   --Количество пассажиров тарифа 'Бизнес'
+            count(distinct case when p.fare_conditions = 'Comfort' then p.id_passenger end) as count_passenger_Comfort,     --Количество пассажиров тарифа 'Комфорт'
+            count(distinct case when p.fare_conditions = 'Economy' then p.id_passenger end) as count_passenger_Economy,     --Количество пассажиров тарифа 'Эконом'
+            sum(case when p.fare_conditions = 'Business' then p.amount_booking end) as sum_amount_booking_Business,         --Суммарная стоимость букинга тарифа 'Бизнес'
+            sum(case when p.fare_conditions = 'Comfort' then p.amount_booking end) as sum_amount_booking_Comfort,           --Суммарная стоимость букинга тарифа 'Комфорт'
+            sum(case when p.fare_conditions = 'Economy' then p.amount_booking end) as sum_amount_booking_Economy,           --Суммарная стоимость букинга тарифа 'Эконом'
+            sum(case when p.fare_conditions = 'Business' then p.amount_air end) as sum_amount_air_Business,                 --Суммарная стоимость перелета тарифа 'Бизнес'
+            sum(case when p.fare_conditions = 'Comfort' then p.amount_air end) as sum_amount_air_Comfort,                   --Суммарная стоимость перелета тарифа 'Комфорт'
+            sum(case when p.fare_conditions = 'Economy' then p.amount_air end) as sum_amount_air_Economy,                   --Суммарная стоимость перелета тарифа 'Эконом'
+            avg(case when p.fare_conditions = 'Business' then p.amount_booking end) as avg_amount_booking_Business,         --Средняя стоимость букинга тарифа 'Бизнес'
+            avg(case when p.fare_conditions = 'Comfort' then p.amount_booking end) as avg_amount_booking_Comfort,           --Средняя стоимость букинга тарифа 'Комфорт'
+            avg(case when p.fare_conditions = 'Economy' then p.amount_booking end) as avg_amount_booking_Economy,           --Средняя стоимость букинга тарифа 'Эконом'
+            avg(case when p.fare_conditions = 'Business' then p.amount_air end) as avg_amount_air_Business,                 --Средняя стоимость перелета тарифа 'Бизнес'
+            avg(case when p.fare_conditions = 'Comfort' then p.amount_air end) as avg_amount_air_Comfort,                   --Средняя стоимость перелета тарифа 'Комфорт'
+            avg(case when p.fare_conditions = 'Economy' then p.amount_air end) as avg_amount_air_Economy,                   --Средняя стоимость перелета тарифа 'Эконом'
+            max(case when p.fare_conditions = 'Business' then p.amount_booking end) as max_amount_booking_Business,         --Максимальная стоимость букинга тарифа 'Бизнес'
+            max(case when p.fare_conditions = 'Comfort' then p.amount_booking end) as max_amount_booking_Comfort,           --Максимальная стоимость букинга тарифа 'Комфорт'
+            max(case when p.fare_conditions = 'Economy' then p.amount_booking end) as max_amount_booking_Economy,           --Максимальная стоимость букинга тарифа 'Эконом'
+            max(case when p.fare_conditions = 'Business' then p.amount_air end) as max_amount_air_Business,                 --Максимальная стоимость перелета тарифа 'Бизнес'
+            max(case when p.fare_conditions = 'Comfort' then p.amount_air end) as max_amount_air_Comfort,                   --Максимальная стоимость перелета тарифа 'Комфорт'
+            max(case when p.fare_conditions = 'Economy' then p.amount_air end) as max_amount_air_Economy,                   --Максимальная стоимость перелета тарифа 'Эконом'
+            min(case when p.fare_conditions = 'Business' then p.amount_booking end) as min_amount_booking_Business,         --Минимальная стоимость букинга тарифа 'Бизнес'
+            min(case when p.fare_conditions = 'Comfort' then p.amount_booking end) as min_amount_booking_Comfort,           --Минимальная стоимость букинга тарифа 'Комфорт'
+            min(case when p.fare_conditions = 'Economy' then p.amount_booking end) as min_amount_booking_Economy,           --Минимальная стоимость букинга тарифа 'Эконом'
+            min(case when p.fare_conditions = 'Business' then p.amount_air end) as min_amount_air_Business,                 --Минимальная стоимость букинга тарифа 'Бизнес'
+            min(case when p.fare_conditions = 'Comfort' then p.amount_air end) as min_amount_air_Comfort,                   --Минимальная стоимость букинга тарифа 'Комфорт'
+            min(case when p.fare_conditions = 'Economy' then p.amount_air end) as min_amount_air_Economy                    --Минимальная стоимость букинга тарифа 'Эконом'
+        from
+            pas as p
+        group by
+            p.id_flight
+    ),
+    --База данных полная по рейсам
+    to_csv as
+    (
+        select
+            --Информация о рейсе
+            f.id_flight,                            --ID рейса
+            f.no_flight,                            --Номер рейса
+            f.status,                               --Статус рейса
+            --Информация о времени рейса 
+            --(индекс 0 - запланированная, 1 - действительная)
+            f.date_dep_0,                           --Дата отбытия запланированная
+            f.date_arr_0,                           --Дата прибытия запланированная
+            f.time_0,                               --Время полета запланированное
+            f.date_dep_1,                           --Дата отбытия действительная
+            f.date_arr_1,                           --Дата прибытия действительная
+            f.time_1,                               --Время полета действительное
+            f.dep_delay,                            --Задержка по времени отбытия
+            f.arr_delay,                            --Задержка по времени прибытия
+            --Информация об аэропорте отбытия
+            f.id_airport_dep,                       --ID аэропорта
+            f.airport_name_dep,                     --Название аэропорта
+            f.city_dep,                             --Город
+            f.longitude_dep,                        --Долгота (координата) города
+            f.latitude_dep,                         --Широта (координата) города
+            f.timezone_dep,                         --Временная зона аэропорта
+            --Информация об аэропорте прибытия
+            f.id_airport_arr,                       --ID аэропорта
+            f.airport_name_arr,                     --Название аэропорта
+            f.city_arr,                             --Город
+            f.longitude_arr,                        --Долгота (координата) города
+            f.latitude_arr,                         --Широта (координата) города
+            f.timezone_arr,                         --Временная зона аэропорта
+            --Информация о самолете
+            f.id_aircraft,                          --ID самолета
+            f.airc_full_seats,                      --Количество мест в самолете
+            f.airc_full_unique_fare_conditions,     --Количество уникальных тарифов
+            f.airc_full_seats_Business,             --Количество мест тарифа 'Бизнес'
+            f.airc_full_seats_Comfort,              --Количество мест тарифа 'Комфорт'
+            f.airc_full_seats_Economy,              --Количество мест тарифа 'Эконом'
+            --Информация о пассажирах
+            p.count_passenger,                      --Количество пассажиров
+            p.count_passenger_Business,             --Количество пассажиров тарифа 'Бизнес'
+            p.count_passenger_Comfort,              --Количество пассажиров тарифа 'Комфорт'
+            p.count_passenger_Economy,              --Количество пассажиров тарифа 'Эконом'
+            --Информация о букинге
+            p.sum_amount_booking,                   --Суммарная стоимость букинга
+            p.avg_amount_booking,                   --Средняя стоимость букинга
+            p.max_amount_booking,                   --Максимальная стоимость букинга
+            p.min_amount_booking,                   --Минимальная стоимость букинга
+            p.max_date_booking,                     --Максимальная дата букинга
+            p.min_date_booking,                     --Минимальная дата букинга
+            --Информация о ценах на билеты
+            p.sum_amount_air,                       --Суммарная стоимость перелета
+            p.avg_amount_air,                       --Средняя стоимость перелета
+            p.max_amount_air,                       --Максимальная стоимость перелета
+            p.min_amount_air,                       --Минимальная стоимость перелета
+            --Информация о Business классе
+            p.sum_amount_booking_Business,          --Суммарная стоимость букинга тарифа 'Бизнес'
+            p.avg_amount_booking_Business,          --Средняя стоимость букинга тарифа 'Бизнес'
+            p.max_amount_booking_Business,          --Максимальная стоимость букинга тарифа 'Бизнес'
+            p.min_amount_booking_Business,          --Минимальная стоимость букинга тарифа 'Бизнес'
+            p.sum_amount_air_Business,              --Суммарная стоимость перелета тарифа 'Бизнес'
+            p.avg_amount_air_Business,              --Средняя стоимость перелета тарифа 'Бизнес'
+            p.max_amount_air_Business,              --Максимальная стоимость перелета тарифа 'Бизнес'
+            p.min_amount_air_Business,              --Минимальная стоимость перелета тарифа 'Бизнес'
+            --Информация о Comfort классе
+            p.sum_amount_booking_Comfort,           --Суммарная стоимость букинга тарифа 'Комфорт'
+            p.avg_amount_booking_Comfort,           --Средняя стоимость букинга тарифа 'Комфорт'
+            p.max_amount_booking_Comfort,           --Максимальная стоимость букинга тарифа 'Комфорт'
+            p.min_amount_booking_Comfort,           --Минимальная стоимость букинга тарифа 'Комфорт'
+            p.sum_amount_air_Comfort,               --Суммарная стоимость перелета тарифа 'Комфорт'
+            p.avg_amount_air_Comfort,               --Средняя стоимость перелета тарифа 'Комфорт'
+            p.max_amount_air_Comfort,               --Максимальная стоимость перелета тарифа 'Комфорт'
+            p.min_amount_air_Comfort,               --Минимальная стоимость перелета тарифа 'Комфорт'
+            --Информация о Economy классе
+            p.sum_amount_booking_Economy,           --Суммарная стоимость букинга тарифа 'Эконом'
+            p.avg_amount_booking_Economy,           --Средняя стоимость букинга тарифа 'Эконом'
+            p.max_amount_booking_Economy,           --Максимальная стоимость букинга тарифа 'Эконом'
+            p.min_amount_booking_Economy,           --Минимальная стоимость букинга тарифа 'Эконом'
+            p.sum_amount_air_Economy,               --Суммарная стоимость перелета тарифа 'Эконом'
+            p.avg_amount_air_Economy,               --Средняя стоимость перелета тарифа 'Эконом'
+            p.max_amount_air_Economy,               --Максимальная стоимость перелета тарифа 'Эконом'
+            p.min_amount_air_Economy,               --Минимальная стоимость перелета тарифа 'Эконом'
+            --Информация о заполненности рейса
+            1.0 * p.count_passenger / nullif(f.airc_full_seats, 0) as occupancy,                                             --Заполненность рейса
+            1.0 * p.count_passenger_Business / nullif(f.airc_full_seats_Business, 0) as occupancy_Business,                  --Заполненность класса 'Бизнес'
+            1.0 * p.count_passenger_Comfort / nullif(f.airc_full_seats_Comfort, 0) as occupancy_Comfort,                     --Заполненность класса 'Комфорт'
+            1.0 * p.count_passenger_Economy / nullif(f.airc_full_seats_Economy, 0) as occupancy_Economy,                     --Заполненность класса 'Эконом'
+            --Информация о ценах на билеты
+            1.0 * p.sum_amount_air_Business / nullif(p.sum_amount_air, 0) as perc_amount_air_Business,                              --Вклад в сумму перелета тарифа 'Бизнес'
+            1.0 * p.sum_amount_air_Comfort / nullif(p.sum_amount_air, 0) as perc_amount_air_Comfort,                                --Вклад в сумму перелета тарифа 'Комфорт'
+            1.0 * p.sum_amount_air_Economy / nullif(p.sum_amount_air, 0) as perc_amount_air_Economy,                                --Вклад в сумму перелета тарифа 'Эконом'
+            1.0 * p.sum_amount_air_Business / nullif(p.count_passenger_Business, 0) as avg_passenger_amount_air_Business,           --Средняя стоимость перелета тарифа 'Бизнес'
+            1.0 * p.sum_amount_air_Comfort / nullif(p.count_passenger_Comfort, 0) as avg_passenger_amount_air_Comfort,              --Средняя стоимость перелета тарифа 'Комфорт'
+            1.0 * p.sum_amount_air_Economy / nullif(p.count_passenger_Economy, 0) as avg_passenger_amount_air_Economy,              --Средняя стоимость перелета тарифа 'Эконом'
+            --Информация о ценах на букинг
+            1.0 * p.sum_amount_booking_Business / nullif(p.sum_amount_booking, 0) as perc_amount_booking_Business,                  --Вклад в сумму букинга тарифа 'Бизнес'
+            1.0 * p.sum_amount_booking_Comfort / nullif(p.sum_amount_booking, 0) as perc_amount_booking_Comfort,                    --Вклад в сумму букинга тарифа 'Комфорт'
+            1.0 * p.sum_amount_booking_Economy / nullif(p.sum_amount_booking, 0) as perc_amount_booking_Economy,                    --Вклад в сумму букинга тарифа 'Эконом'
+            1.0 * p.sum_amount_booking_Business / nullif(p.count_passenger_Business, 0) as avg_passenger_amount_booking_Business,   --Средняя стоимость букинга тарифа 'Бизнес'
+            1.0 * p.sum_amount_booking_Comfort / nullif(p.count_passenger_Comfort, 0) as avg_passenger_amount_booking_Comfort,      --Средняя стоимость букинга тарифа 'Комфорт'
+            1.0 * p.sum_amount_booking_Economy / nullif(p.count_passenger_Economy, 0) as avg_passenger_amount_booking_Economy,      --Средняя стоимость букинга тарифа 'Эконом'
+            --Информация о ценах
+            p.sum_amount_air + p.sum_amount_booking as sum_amount,                                                                                          --Суммарная стоимость
+            p.sum_amount_air_Business + p.sum_amount_booking_Business as sum_amount_Business,                                                               --Суммарная стоимость тарифа 'Бизнес'
+            p.sum_amount_air_Comfort + p.sum_amount_booking_Comfort as sum_amount_Comfort,                                                                  --Суммарная стоимость тарифа 'Комфорт'
+            p.sum_amount_air_Economy + p.sum_amount_booking_Economy as sum_amount_Economy,                                                                  --Суммарная стоимость тарифа 'Эконом'
+            1.0 * (p.sum_amount_air + p.sum_amount_booking) / nullif(p.count_passenger, 0) as avg_passenger_amount,                                         --Средняя стоимость для пассажира
+            1.0 * (p.sum_amount_air_Business + p.sum_amount_booking_Business) / nullif(p.count_passenger_Business, 0) as avg_passenger_amount_Business,     --Средняя стоимость для пассажира 'Бизнес'
+            1.0 * (p.sum_amount_air_Comfort + p.sum_amount_booking_Comfort) / nullif(p.count_passenger_Comfort, 0) as avg_passenger_amount_Comfort,         --Средняя стоимость для пассажира 'Комфорт'
+            1.0 * (p.sum_amount_air_Economy + p.sum_amount_booking_Economy) / nullif(p.count_passenger_Economy, 0) as avg_passenger_amount_Economy,         --Средняя стоимость для пассажира 'Эконом'
+            --Информация о перелете
+            acosd(sind(f.latitude_dep) * sind(f.latitude_arr) + cosd(f.latitude_dep) * cosd(f.latitude_arr) * cosd(f.longitude_dep - f.longitude_arr)) as delta_fi_deg,                             --Угол полета (в градусах)
+            acos(sind(f.latitude_dep) * sind(f.latitude_arr) + cosd(f.latitude_dep) * cosd(f.latitude_arr) * cosd(f.longitude_dep - f.longitude_arr)) * 6372.795 as mileage,                        --Дальность полета (в километрах)
+            acos(sind(f.latitude_dep) * sind(f.latitude_arr) + cosd(f.latitude_dep) * cosd(f.latitude_arr) * cosd(f.longitude_dep - f.longitude_arr)) * 6372795 / time_sec_0 as avg_velocity_0,     --Средняя скорость полета запланированная
+            acos(sind(f.latitude_dep) * sind(f.latitude_arr) + cosd(f.latitude_dep) * cosd(f.latitude_arr) * cosd(f.longitude_dep - f.longitude_arr)) * 6372795 / time_sec_1 as avg_velocity_1,     --Средняя скорость полета реальная
+            --Информация о тратах
+            f.price_fuel_per,                                                                       --Цена за килограмм топлива
+            f.fuel_consumption,                                                                     --Расход топлива в секунду
+            time_sec_0 * f.fuel_consumption * f.price_fuel_per as price_fuel_0,                     --Запланированный расход средств на топливо
+            time_sec_1 * f.fuel_consumption * f.price_fuel_per as price_fuel_1,                     --Реальный расход средств на топливо
+            --Приблизительная формула для расчета прибыльности рейса
+            -- 2.5 - к-т запаса по топливу
+            -- Расходы запланированные (не реальные)
+            -- 500000 - дополнительные расходы
+            p.sum_amount_air - time_sec_0 * f.fuel_consumption * f.price_fuel_per * 2.5 - 500000 as profit_flight, --Прибыль по рейсу
+            p.sum_amount_air - time_sec_0 * f.fuel_consumption * f.price_fuel_per * 2.5 - 500000 > 0 as IsProfit   --Прибыльный ли рейс?
+        from
+            fly as f
+            left join group_pas as p
+                on f.id_flight = p.id_flight
+        order by
+            f.id_flight
+    ),
+    --База данных полная по рейсам (результат в CSV) - сокращенная
+    to_csv_sub as
+    (
+        select
+            --Информация о рейсе
+            c.id_flight,                            --ID рейса
+            c.no_flight,                            --Номер рейса
+            --Информация о времени рейса
+            c.date_dep_0,                           --Дата отбытия запланированная
+            c.date_arr_0,                           --Дата прибытия запланированная
+            c.time_0,                               --Время полета запланированное
+            c.dep_delay,                            --Задержка по времени отбытия
+            c.arr_delay,                            --Задержка по времени прибытия
+            --Информация об аэропорте отбытия
+            c.id_airport_dep,                       --ID аэропорта
+            c.airport_name_dep,                     --Название аэропорта
+            c.city_dep,                             --Город
+            c.timezone_dep,                         --Временная зона аэропорта
+            --Информация об аэропорте прибытия
+            c.id_airport_arr,                       --ID аэропорта
+            c.airport_name_arr,                     --Название аэропорта
+            c.city_arr,                             --Город
+            c.timezone_arr,                         --Временная зона аэропорта
+            --Информация о самолете
+            c.id_aircraft,                          --ID самолета
+            c.airc_full_seats,                      --Количество мест в самолете
+            c.airc_full_seats_Business,             --Количество мест тарифа 'Бизнес'
+            c.airc_full_seats_Economy,              --Количество мест тарифа 'Эконом'
+            --Информация о пассажирах
+            c.count_passenger,                      --Количество пассажиров
+            c.count_passenger_Business,             --Количество пассажиров тарифа 'Бизнес'
+            c.count_passenger_Economy,              --Количество пассажиров тарифа 'Эконом'
+            --Информация о заполненности рейса
+            c.occupancy,                            --Заполненность рейса
+            c.occupancy_Business,                   --Заполненность класса 'Бизнес'
+            c.occupancy_Economy,                    --Заполненность класса 'Эконом'
+            --Информация о ценах
+            c.sum_amount_booking,                   --Суммарная стоимость букинга
+            c.sum_amount_air,                       --Суммарная стоимость перелета
+            c.sum_amount,                           --Суммарная стоимость
+            --Информация о Business классе
+            c.sum_amount_booking_Business,          --Суммарная стоимость букинга тарифа 'Бизнес'
+            c.sum_amount_air_Business,              --Суммарная стоимость перелета тарифа 'Бизнес'
+            --Информация о Economy классе
+            c.sum_amount_booking_Economy,           --Суммарная стоимость букинга тарифа 'Эконом'
+            c.sum_amount_air_Economy,               --Суммарная стоимость перелета тарифа 'Эконом'
+            --Информация о перелете
+            c.mileage,                              --Дальность полета (в километрах)
+            c.avg_velocity_0,                       --Средняя скорость полета запланированная
+            --Информация о тратах
+            c.price_fuel_0,                         --Запланированный расход средств на топливо
+            c.profit_flight,                        --Прибыль по рейсу
+            c.IsProfit                              --Прибыльный ли рейс?
+        from
+            to_csv as c
+        order by
+            c.profit_flight desc
+    )
+--Результат
+select
+    *
+from
+    --Полная таблица
+    --to_csv as tc
+    --Сокращенная таблица
+    to_csv_sub as tcs
+
+--Проверим, что никакие рейсы не потеряли
+/*
+select
+    count(fly.id_flight)
+from
+    fly
+*/
