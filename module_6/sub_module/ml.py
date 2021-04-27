@@ -96,8 +96,8 @@ def get_scaler(X_train,X_test):
     * Нормализованные тренировочная и тестовая выборки.
     '''
     #Разделение признаков на числовой и номинативный
-    col_num = X_train.select_dtypes(exclude=['object']).columns
-    col_nom = X_train.select_dtypes(include=['object']).columns
+    col_num = X_train.select_dtypes(exclude=['uint8']).columns
+    col_nom = X_train.select_dtypes(include=['uint8']).columns
     #Стандартизация
     Scaler = StandardScaler()
     Scaler.fit(X_train[col_num])
